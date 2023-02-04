@@ -22,8 +22,8 @@ export default function Header() {
                 router.push("/");
               }}
               src="/logo.png"
-              height={20}
-              width={20}
+              height={{ base: 12, md: 16 }}
+              width={{ base: 12, md: 16 }}
               alt="gopher header icon"
             />
             <Heading color={"white"} fontSize={{ base: "xl", md: "2xl" }}>
