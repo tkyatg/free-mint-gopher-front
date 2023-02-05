@@ -16,12 +16,21 @@ import {
   CardBody,
   Divider,
   Box,
+  Modal,
+  ModalOverlay,
+  ModalContent,
+  ModalHeader,
+  ModalCloseButton,
+  ModalBody,
+  ModalFooter,
+  useDisclosure,
+  Skeleton,
 } from "@chakra-ui/react";
 import type { NextPageWithLayout } from "next";
 import { Layout } from "@/components/layout/default";
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { ethers } from "ethers";
+import { useEffect, useRef, useState } from "react";
+import { BigNumber, ethers } from "ethers";
 const nfts = [
   {
     name: "ノーマルGopherくん",
@@ -45,8 +54,13 @@ const contractAddress = "0xEf473F2eFDE884950b93C6dC0d31825a4c1aE42F";
 
 const Home: NextPageWithLayout = () => {
   const [totalSupply, setTotalSupply] = useState<BigInt>();
-  const [loggedIn, setLoggedIn] = useState<boolean>(false);
-  const [walletAddress, setWalletAddress] = useState<string>("");
+  const [walletAddress, setWalletAddress] = useState<string>();
+  const [minting, setMinting] = useState<boolean>(false);
+  const { isOpen, onOpen, onClose } = useDisclosure();
+  const finalRef = useRef(null);
+  const [imageUrl, setImageUrl] = useState<string>();
+  const [tokenId, setTokenId] = useState<number>();
+
   useEffect(() => {
     (async () => {
       const ethereum = (window as any).ethereum;
@@ -65,8 +79,7 @@ const Home: NextPageWithLayout = () => {
         method: "eth_accounts",
       });
       if (accounts.length !== 0) {
-        setWalletAddress(accounts[0]);
-        setLoggedIn(true);
+        setWalletAddress(accounts[0].toLowerCase());
       }
       setTotalSupply(ts);
     })();
@@ -83,33 +96,53 @@ const Home: NextPageWithLayout = () => {
     });
     if (accounts.length !== 0) {
       setWalletAddress(accounts[0]);
-      setLoggedIn(true);
     }
   }
   async function mintNft() {
-    const ethereum = (window as any).ethereum;
-    if (!ethereum) {
-      alert("このままだと動かない");
+    if (minting) {
       return;
     }
-    const provider = new ethers.providers.Web3Provider(ethereum);
-    const signer = provider.getSigner();
-    const contract = new ethers.Contract(
-      contractAddress,
-      abiJson["abi"],
-      signer
-    );
-    const before = await contract.totalSupply();
-    const mintTx = await contract
-      .connect(signer)
-      .safeMint({ value: ethers.utils.parseEther("0.01") });
-    await mintTx.wait();
-    const after = await contract.totalSupply();
-    for (let i: number = before.toNumber(); i < after.toNumber(); i++) {
-      if (walletAddress == (await contract.ownerOf(i - 1))) {
-        console.log("ゲットしたNFTはこれだぜ!!");
-        console.log(await contract.tokenURI(i - 1));
+    setMinting(true);
+    try {
+      const ethereum = (window as any).ethereum;
+      if (!ethereum) {
+        alert("このままだと動かない");
+        return;
       }
+
+      await ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: "0x5" }],
+      });
+
+      const provider = new ethers.providers.Web3Provider(ethereum);
+      const signer = provider.getSigner();
+      const contract = new ethers.Contract(
+        contractAddress,
+        abiJson["abi"],
+        signer
+      );
+      const before = await contract.totalSupply();
+      const mintTx = await contract
+        .connect(signer)
+        .safeMint({ value: ethers.utils.parseEther("0.01") });
+      onOpen();
+      await mintTx.wait();
+      const after = await contract.totalSupply();
+
+      for (let i: number = before.toNumber(); i < after.toNumber(); i++) {
+        const owner = await contract.ownerOf(i);
+        if (walletAddress == owner.toLowerCase()) {
+          setTokenId(i);
+          setImageUrl("gophers/4.png");
+        }
+      }
+    } catch (err) {
+      console.log(err);
+      onClose();
+      alert("処理失敗");
+    } finally {
+      setMinting(false);
     }
   }
 
@@ -184,6 +217,11 @@ const Home: NextPageWithLayout = () => {
                         このアプリについて（zenn）
                       </Link>
                     </Text>
+                    <Text color="gray.700" fontSize="sm">
+                      <span>※オリジナルのThe Go gopher（Gopherくん）は、</span>
+                      <span>Renée French</span>
+                      <span>によってデザインされました。</span>
+                    </Text>
                   </Stack>
                   <Stack spacing={6}>
                     <Flex>
@@ -194,7 +232,7 @@ const Home: NextPageWithLayout = () => {
                         <Text fontWeight={"bold"}>0.01 eth</Text>
                       </HStack>
                     </Flex>
-                    {loggedIn ? (
+                    {walletAddress ? (
                       <Button
                         colorScheme={"twitter"}
                         size={"md"}
@@ -251,7 +289,7 @@ const Home: NextPageWithLayout = () => {
                             <Box ml={"auto"}>
                               <Link
                                 href={
-                                  "https://polygonscan.com/address/0x38c74e2b755cb36238acc2446bf7a43d3359d90d"
+                                  "https://goerli.etherscan.io/address/0xEf473F2eFDE884950b93C6dC0d31825a4c1aE42F"
                                 }
                               >
                                 <Text color="blue.500" fontSize="sm">
@@ -359,6 +397,52 @@ const Home: NextPageWithLayout = () => {
               })}
             </Grid>
           </Stack>
+          <Modal finalFocusRef={finalRef} isOpen={isOpen} onClose={onClose}>
+            <ModalOverlay />
+            <ModalContent>
+              <ModalHeader textAlign={"center"}>
+                {imageUrl ? "当たったGopherくん🎉" : "平均10秒以上待ちます..."}
+              </ModalHeader>
+              <ModalBody>
+                {imageUrl ? (
+                  <Image
+                    height={{ base: "full" }}
+                    width={"full"}
+                    objectFit="cover"
+                    rounded={"md"}
+                    src={imageUrl ? imageUrl : undefined}
+                    alt="img"
+                  />
+                ) : (
+                  <Skeleton>
+                    <Image
+                      height={{ base: "full" }}
+                      width={"full"}
+                      objectFit="cover"
+                      rounded={"md"}
+                      src={"gophers/1.png"}
+                      alt="img"
+                    />
+                  </Skeleton>
+                )}
+                <Stack mt={2}>
+                  <Text
+                    color="gray.700"
+                    fontWeight={"bold"}
+                    wordBreak={"break-all"}
+                    fontSize={{ base: "sm", md: "md" }}
+                  >
+                    {tokenId ? `Token ID #${tokenId}` : "loading..."}
+                  </Text>
+                </Stack>
+              </ModalBody>
+              <ModalFooter>
+                <Button colorScheme="twitter" onClick={onClose}>
+                  閉じる
+                </Button>
+              </ModalFooter>
+            </ModalContent>
+          </Modal>
         </Container>
       </>
     </Layout>
