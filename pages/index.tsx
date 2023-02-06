@@ -20,17 +20,18 @@ import {
   ModalOverlay,
   ModalContent,
   ModalHeader,
-  ModalCloseButton,
   ModalBody,
   ModalFooter,
   useDisclosure,
   Skeleton,
+  Spacer,
 } from "@chakra-ui/react";
-import type { NextPageWithLayout } from "next";
+import type { GetServerSideProps, NextPageWithLayout } from "next";
 import { Layout } from "@/components/layout/default";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { BigNumber, ethers } from "ethers";
+import { ethers } from "ethers";
+
 const nfts = [
   {
     name: "ノーマルGopherくん",
@@ -52,43 +53,57 @@ const nfts = [
 const abiJson = require("../contracts/abi.json");
 const contractAddress = "0xEf473F2eFDE884950b93C6dC0d31825a4c1aE42F";
 
-const Home: NextPageWithLayout = () => {
-  const [totalSupply, setTotalSupply] = useState<BigInt>();
+type Props = {
+  totalSupplyHex: string;
+};
+
+const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
+  const [totalSupply, _] = useState<BigInt>(BigInt(totalSupplyHex));
+
   const [walletAddress, setWalletAddress] = useState<string>();
   const [minting, setMinting] = useState<boolean>(false);
   const { isOpen, onOpen, onClose } = useDisclosure();
   const finalRef = useRef(null);
   const [imageUrl, setImageUrl] = useState<string>();
   const [tokenId, setTokenId] = useState<number>();
-
+  const [ethereum, setEthereum] = useState<any>();
+  const [isSmartPhone, setIsSmartPhone] = useState<boolean>(false);
+  const [isMetamask, setIsMatamask] = useState<boolean>(false);
   useEffect(() => {
+    const { ethereum } = window as any;
+    if (!ethereum) {
+      return;
+    }
+    setEthereum(ethereum);
+
+    if (navigator.userAgent.match(/iPhone|Android.+Mobile/)) {
+      setIsSmartPhone(true);
+    }
+    if (ethereum && ethereum.isMetaMask) {
+      setIsMatamask(true);
+    }
     (async () => {
-      const ethereum = (window as any).ethereum;
-      if (!ethereum) {
-        alert("このままだと動かない");
-        return;
+      try {
+        const accounts = await ethereum.request({
+          method: "eth_accounts",
+        });
+        if (accounts.length !== 0) {
+          setWalletAddress(accounts[0].toLowerCase());
+        }
+      } catch (err) {
+        console.log(err);
       }
-      const provider = new ethers.providers.Web3Provider(ethereum);
-      const contract = new ethers.Contract(
-        contractAddress,
-        abiJson["abi"],
-        provider
-      );
-      const ts = await contract.totalSupply();
-      const accounts = await ethereum.request({
-        method: "eth_accounts",
-      });
-      if (accounts.length !== 0) {
-        setWalletAddress(accounts[0].toLowerCase());
-      }
-      setTotalSupply(ts);
     })();
   }, [totalSupply, walletAddress]);
 
   async function metamaskAuth() {
-    const ethereum = (window as any).ethereum;
-    if (!ethereum) {
-      alert("このままだと動かない");
+    if (!ethereum || !ethereum.isMetaMask) {
+      const message = "Metamask インストールページに遷移しますか？";
+      const installURL =
+        "https://chrome.google.com/webstore/detail/metamask/nkbihfbeogaeaoehlefnkodbefgpgknn";
+      if (window.confirm(message)) {
+        window.open(installURL, "_blank");
+      }
       return;
     }
     const accounts = await ethereum.request({
@@ -99,17 +114,20 @@ const Home: NextPageWithLayout = () => {
     }
   }
   async function mintNft() {
+    if (!ethereum || !ethereum.isMetaMask) {
+      const message = "Metamask インストールページに遷移しますか？";
+      const installURL =
+        "https://chrome.google.com/webstore/detail/metamask/nkbihfbeogaeaoehlefnkodbefgpgknn";
+      if (window.confirm(message)) {
+        window.open(installURL, "_blank");
+      }
+      return;
+    }
     if (minting) {
       return;
     }
     setMinting(true);
     try {
-      const ethereum = (window as any).ethereum;
-      if (!ethereum) {
-        alert("このままだと動かない");
-        return;
-      }
-
       await ethereum.request({
         method: "wallet_switchEthereumChain",
         params: [{ chainId: "0x5" }],
@@ -130,17 +148,18 @@ const Home: NextPageWithLayout = () => {
       await mintTx.wait();
       const after = await contract.totalSupply();
 
+      // TODO: transaction から tokenID とか取得できないかな
       for (let i: number = before.toNumber(); i < after.toNumber(); i++) {
         const owner = await contract.ownerOf(i);
         if (walletAddress == owner.toLowerCase()) {
           setTokenId(i);
-          setImageUrl("gophers/4.png");
+          const imageUrl = await contract.tokenURI(i);
+          setImageUrl(imageUrl);
         }
       }
     } catch (err) {
       console.log(err);
       onClose();
-      alert("処理失敗");
     } finally {
       setMinting(false);
     }
@@ -162,7 +181,7 @@ const Home: NextPageWithLayout = () => {
         >
           <Stack spacing={{ base: 6, md: 10 }}>
             <Image
-              height={{ base: 120, md: 200 }}
+              height={{ base: 100, sm: 140, md: 200 }}
               width={"full"}
               rounded={"md"}
               src="main.png"
@@ -204,29 +223,32 @@ const Home: NextPageWithLayout = () => {
                     </HStack>
                   </Stack>
                   <Stack>
-                    <Text color="gray.700" fontSize="sm">
+                    <Text color="gray.700">
                       GopherくんのNFTがランダムに出現するガチャです。
                       <br />
                       全4種類。
                     </Text>
-                    <Text color="gray.700" fontSize="sm">
+                    <Text color="gray.700">
                       テスト環境のため、無料で利用できます。
                     </Text>
-                    <Text color="blue.500" fontSize="sm">
-                      <Link href={"https://zenn.dev"}>
+                    <Text color="blue.500">
+                      <Link
+                        href={
+                          "https://zenn.dev/takuya911/articles/free-mint-gophers"
+                        }
+                      >
                         このアプリについて（zenn）
                       </Link>
                     </Text>
-                    <Text color="gray.700" fontSize="sm">
-                      <span>※オリジナルのThe Go gopher（Gopherくん）は、</span>
-                      <span>Renée French</span>
-                      <span>によってデザインされました。</span>
+                    <Text color="gray.700">
+                      🚨オリジナルの The Go gopher（Gopher くん）は、Renée
+                      French によってデザインされました。
                     </Text>
                   </Stack>
                   <Stack spacing={6}>
                     <Flex>
                       <Heading color="gray.700" fontSize="lg">
-                        Price
+                        Price(Goerli)
                       </Heading>
                       <HStack ml={"auto"}>
                         <Text fontWeight={"bold"}>0.01 eth</Text>
@@ -237,24 +259,62 @@ const Home: NextPageWithLayout = () => {
                         colorScheme={"twitter"}
                         size={"md"}
                         w={{ base: "full" }}
-                        rounded={"full"}
+                        rounded={"md"}
+                        variant="outline"
                         onClick={() => {
                           mintNft();
                         }}
                       >
                         ガチャを回す
                       </Button>
+                    ) : isSmartPhone && !isMetamask ? (
+                      <a
+                        href={
+                          "https://metamask.app.link/dapp/free-mint-gopher-front.vercel.app/"
+                        }
+                      >
+                        <Button
+                          colorScheme={"orange"}
+                          size={"md"}
+                          variant="outline"
+                          w={{ base: "full" }}
+                          rounded={"md"}
+                        >
+                          <HStack>
+                            <Box height={8} width={8}>
+                              <Image
+                                alt={"metamask icon"}
+                                src={
+                                  "https://upload.wikimedia.org/wikipedia/commons/3/36/MetaMask_Fox.svg"
+                                }
+                              ></Image>
+                            </Box>
+                            <Text>Metamask login</Text>
+                          </HStack>
+                        </Button>
+                      </a>
                     ) : (
                       <Button
                         colorScheme={"orange"}
                         size={"md"}
+                        variant="outline"
                         w={{ base: "full" }}
-                        rounded={"full"}
+                        rounded={"md"}
                         onClick={() => {
                           metamaskAuth();
                         }}
                       >
-                        Metamask login
+                        <HStack>
+                          <Box height={8} width={8}>
+                            <Image
+                              alt={"metamask icon"}
+                              src={
+                                "https://upload.wikimedia.org/wikipedia/commons/3/36/MetaMask_Fox.svg"
+                              }
+                            ></Image>
+                          </Box>
+                          <Text>Metamask login</Text>
+                        </HStack>
                       </Button>
                     )}
                   </Stack>
@@ -275,46 +335,38 @@ const Home: NextPageWithLayout = () => {
                         <Divider />
                         <Stack>
                           <Flex>
-                            <Text color="gray.700" fontSize="sm">
-                              Network
-                            </Text>
-                            <Text color="gray.700" fontSize="sm" ml={"auto"}>
-                              Goerli
-                            </Text>
+                            <Text color="gray.700">Network</Text>
+                            <Spacer />
+                            <Text color="gray.700">Goerli</Text>
                           </Flex>
                           <Flex>
-                            <Text color="gray.700" fontSize="sm">
-                              Contract Address
-                            </Text>
-                            <Box ml={"auto"}>
+                            <Text color="gray.700">Contract Address</Text>
+                            <Spacer />
+                            <Text color="blue.500">
                               <Link
                                 href={
                                   "https://goerli.etherscan.io/address/0xEf473F2eFDE884950b93C6dC0d31825a4c1aE42F"
                                 }
                               >
-                                <Text color="blue.500" fontSize="sm">
-                                  {contractAddress.slice(0, 4) +
-                                    "..." +
-                                    contractAddress.slice(-4)}
-                                </Text>
+                                {contractAddress.slice(0, 4) +
+                                  "..." +
+                                  contractAddress.slice(-4)}
                               </Link>
-                            </Box>
+                            </Text>
                           </Flex>
                           <Flex>
-                            <Text color="gray.700" fontSize="sm">
+                            <Text color="gray.700">
                               これまでに実行された回数
                             </Text>
-                            <Text color="gray.700" fontSize="sm" ml={"auto"}>
+                            <Spacer />
+                            <Text color="gray.700">
                               {totalSupply?.toString()}
                             </Text>
                           </Flex>
                           <Flex>
-                            <Text color="gray.700" fontSize="sm">
-                              ガチャガチャ残り
-                            </Text>
-                            <Text color="gray.700" fontSize="sm" ml={"auto"}>
-                              ∞
-                            </Text>
+                            <Text color="gray.700">ガチャガチャ残り</Text>
+                            <Spacer />
+                            <Text color="gray.700">∞</Text>
                           </Flex>
                         </Stack>
                       </Stack>
@@ -333,12 +385,36 @@ const Home: NextPageWithLayout = () => {
                         <Divider />
                         <Stack>
                           <Flex>
-                            <Text color="gray.700" fontSize="sm">
-                              Twitter
-                            </Text>
-                            <Text color="blue.500" fontSize="sm" ml={"auto"}>
+                            <Text color="gray.700">Twitter</Text>
+                            <Spacer />
+                            <Text color="blue.500">
                               <Link href={"https://twitter.com/takuya_web3"}>
                                 @takuya_web3
+                              </Link>
+                            </Text>
+                          </Flex>
+                          <Flex>
+                            <Text color="gray.700">Github</Text>
+                            <Spacer />
+                            <Text color="blue.500">
+                              <Link
+                                href={
+                                  "https://github.com/tkyatg/free-mint-gopher-front"
+                                }
+                              >
+                                Front Repository
+                              </Link>
+                            </Text>
+                          </Flex>
+                          <Flex>
+                            <Spacer />
+                            <Text color="blue.500">
+                              <Link
+                                href={
+                                  "https://github.com/tkyatg/free-mint-gopher-contract"
+                                }
+                              >
+                                Contract Repository
                               </Link>
                             </Text>
                           </Flex>
@@ -401,7 +477,9 @@ const Home: NextPageWithLayout = () => {
             <ModalOverlay />
             <ModalContent>
               <ModalHeader textAlign={"center"}>
-                {imageUrl ? "当たったGopherくん🎉" : "平均10秒以上待ちます..."}
+                {imageUrl
+                  ? "🎉 このGopherくんが当たりました 🎉"
+                  : "Minting...(10秒くらい)"}
               </ModalHeader>
               <ModalBody>
                 {imageUrl ? (
@@ -450,3 +528,22 @@ const Home: NextPageWithLayout = () => {
 };
 
 export default Home;
+
+export const getServerSideProps: GetServerSideProps = async (context) => {
+  const provider = new ethers.providers.JsonRpcProvider(
+    "https://rpc.ankr.com/eth_goerli"
+  );
+  const contract = new ethers.Contract(
+    contractAddress,
+    abiJson["abi"],
+    provider
+  );
+  const totalSupply = await contract.totalSupply();
+  const props: Props = {
+    totalSupplyHex: totalSupply._hex,
+  };
+
+  return {
+    props: props,
+  };
+};
