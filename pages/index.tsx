@@ -100,7 +100,7 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
     if (!ethereum || !ethereum.isMetaMask) {
       const message = "Metamask インストールページに遷移しますか？";
       const installURL =
-        "https://chrome.google.com/webstore/detail/metamask/nkbihfbeogaeaoehlefnkodbefgpgknn";
+        "https://metamask.app.link/dapp/free-mint-gopher-front.vercel.app/";
       if (window.confirm(message)) {
         window.open(installURL, "_blank");
       }
@@ -117,7 +117,7 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
     if (!ethereum || !ethereum.isMetaMask) {
       const message = "Metamask インストールページに遷移しますか？";
       const installURL =
-        "https://chrome.google.com/webstore/detail/metamask/nkbihfbeogaeaoehlefnkodbefgpgknn";
+        "https://metamask.app.link/dapp/free-mint-gopher-front.vercel.app/";
       if (window.confirm(message)) {
         window.open(installURL, "_blank");
       }
