@@ -515,9 +515,11 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
                 </Stack>
               </ModalBody>
               <ModalFooter>
-                <Button colorScheme="twitter" onClick={onClose}>
-                  閉じる
-                </Button>
+                {tokenId && (
+                  <Button colorScheme="twitter" onClick={onClose}>
+                    閉じる
+                  </Button>
+                )}
               </ModalFooter>
             </ModalContent>
           </Modal>
