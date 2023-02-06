@@ -140,10 +140,18 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
         abiJson["abi"],
         signer
       );
+
+      const balance = await signer.getBalance();
+      console.log(Number(balance));
+      if (balance.lt(ethers.utils.parseEther("0.01"))) {
+        alert("ガス代が足りない可能性があります");
+        return;
+      }
+
       const before = await contract.totalSupply();
-      const mintTx = await contract
-        .connect(signer)
-        .safeMint({ value: ethers.utils.parseEther("0.01") });
+      const mintTx = await contract.connect(signer).safeMint({
+        value: ethers.utils.parseEther("0.01"),
+      });
       onOpen();
       await mintTx.wait();
       const after = await contract.totalSupply();
