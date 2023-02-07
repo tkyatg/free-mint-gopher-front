@@ -30,8 +30,9 @@ import type { GetServerSideProps, NextPageWithLayout } from "next";
 import { Layout } from "@/components/layout/default";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { ethers } from "ethers";
-
+import { ethers, providers } from "ethers";
+import QRCodeModal from "@walletconnect/qrcode-modal";
+import WalletConnect from "@walletconnect/client";
 const nfts = [
   {
     name: "ノーマルGopherくん",
@@ -60,111 +61,86 @@ type Props = {
 const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
   const [totalSupply, _] = useState<BigInt>(BigInt(totalSupplyHex));
 
-  const [walletAddress, setWalletAddress] = useState<string>();
   const [minting, setMinting] = useState<boolean>(false);
   const { isOpen, onOpen, onClose } = useDisclosure();
   const finalRef = useRef(null);
   const [imageUrl, setImageUrl] = useState<string>();
   const [tokenId, setTokenId] = useState<number>();
-  const [ethereum, setEthereum] = useState<any>();
-  const [isSmartPhone, setIsSmartPhone] = useState<boolean>(false);
-  const [isMetamask, setIsMatamask] = useState<boolean>(false);
-  useEffect(() => {
-    const { ethereum } = window as any;
-    if (!ethereum) {
-      return;
-    }
-    setEthereum(ethereum);
+  const [connector, setConnector] = useState<WalletConnect>();
 
-    if (navigator.userAgent.match(/iPhone|Android.+Mobile/)) {
-      setIsSmartPhone(true);
-    }
-    if (ethereum && ethereum.isMetaMask) {
-      setIsMatamask(true);
-    }
+  useEffect(() => {
+    const connector = new WalletConnect({
+      bridge: "https://bridge.walletconnect.org",
+      qrcodeModal: QRCodeModal,
+    });
+
+    setConnector(connector);
+
     (async () => {
       try {
-        const accounts = await ethereum.request({
-          method: "eth_accounts",
-        });
-        if (accounts.length !== 0) {
-          setWalletAddress(accounts[0].toLowerCase());
-        }
+        // TODO: set user
       } catch (err) {
         console.log(err);
       }
     })();
-  }, [totalSupply, walletAddress]);
+  }, [totalSupply]);
 
-  async function metamaskAuth() {
-    if (!ethereum || !ethereum.isMetaMask) {
-      const message = "Metamask インストールページに遷移しますか？";
-      const installURL =
-        "https://metamask.app.link/dapp/free-mint-gopher-front.vercel.app/";
-      if (window.confirm(message)) {
-        window.open(installURL, "_blank");
-      }
+  async function walletConnectLogin() {
+    if (!connector) {
       return;
     }
-    const accounts = await ethereum.request({
-      method: "eth_requestAccounts",
+    if (connector.accounts[0]) {
+      await connector.killSession();
+    }
+    await connector.createSession();
+    connector.on("connect", (error, payload) => {
+      if (error) {
+        console.error(error);
+        return;
+      }
     });
-    if (accounts.length !== 0) {
-      setWalletAddress(accounts[0]);
-    }
   }
+
   async function mintNft() {
-    if (!ethereum || !ethereum.isMetaMask) {
-      const message = "Metamask インストールページに遷移しますか？";
-      const installURL =
-        "https://metamask.app.link/dapp/free-mint-gopher-front.vercel.app/";
-      if (window.confirm(message)) {
-        window.open(installURL, "_blank");
-      }
-      return;
-    }
     if (minting) {
       return;
     }
     setMinting(true);
     try {
-      await ethereum.request({
-        method: "wallet_switchEthereumChain",
-        params: [{ chainId: "0x5" }],
-      });
-
-      const provider = new ethers.providers.Web3Provider(ethereum);
-      const signer = provider.getSigner();
+      if (!connector || !connector.accounts[0]) {
+        return;
+      }
+      const provider = new ethers.providers.JsonRpcProvider(
+        "https://rpc.ankr.com/eth_goerli"
+      );
+      const signer = new ethers.VoidSigner(connector.accounts[0], provider);
       const contract = new ethers.Contract(
         contractAddress,
         abiJson["abi"],
         signer
       );
-
-      const balance = await signer.getBalance();
-      console.log(Number(balance));
-      if (balance.lt(ethers.utils.parseEther("0.01"))) {
-        alert("ガス代が足りない可能性があります");
-        return;
-      }
-
+      const fragment = contract.interface.getFunction("safeMint");
+      const selectorHash = contract.interface.getSighash(fragment);
       const before = await contract.totalSupply();
-      const mintTx = await contract.connect(signer).safeMint({
-        value: ethers.utils.parseEther("0.01"),
+      const result = await connector.sendTransaction({
+        from: connector.accounts[0],
+        to: contractAddress,
+        data: selectorHash,
+        value: ethers.utils.parseEther("0.01")._hex,
       });
-      onOpen();
-      await mintTx.wait();
-      const after = await contract.totalSupply();
+      console.log(`transaction hash: ${result}`);
+      // onOpen();
+      // const after = await contract.totalSupply();
 
-      // TODO: transaction から tokenID とか取得できないかな
-      for (let i: number = before.toNumber(); i < after.toNumber(); i++) {
-        const owner = await contract.ownerOf(i);
-        if (walletAddress == owner.toLowerCase()) {
-          setTokenId(i);
-          const imageUrl = await contract.tokenURI(i);
-          setImageUrl(imageUrl);
-        }
-      }
+      // // TODO: transaction から tokenID とか取得できないかな
+      // for (let i: number = before.toNumber(); i < after.toNumber(); i++) {
+      //   const owner = await contract.ownerOf(i);
+      //   if (walletAddress == owner.toLowerCase()) {
+      //     setTokenId(i);
+      //     const imageUrl = await contract.tokenURI(i);
+      //     setImageUrl(imageUrl);
+      //   }
+      // }
     } catch (err) {
       console.log(err);
       onClose();
@@ -262,7 +238,7 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
                         <Text fontWeight={"bold"}>0.01 eth</Text>
                       </HStack>
                     </Flex>
-                    {walletAddress ? (
+                    {connector?.accounts[0] ? (
                       <Button
                         colorScheme={"twitter"}
                         size={"md"}
@@ -275,41 +251,15 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
                       >
                         ガチャを回す
                       </Button>
-                    ) : isSmartPhone && !isMetamask ? (
-                      <a
-                        href={
-                          "https://metamask.app.link/dapp/free-mint-gopher-front.vercel.app/"
-                        }
-                      >
-                        <Button
-                          colorScheme={"orange"}
-                          size={"md"}
-                          variant="outline"
-                          w={{ base: "full" }}
-                          rounded={"md"}
-                        >
-                          <HStack>
-                            <Box height={8} width={8}>
-                              <Image
-                                alt={"metamask icon"}
-                                src={
-                                  "https://upload.wikimedia.org/wikipedia/commons/3/36/MetaMask_Fox.svg"
-                                }
-                              ></Image>
-                            </Box>
-                            <Text>Metamask login</Text>
-                          </HStack>
-                        </Button>
-                      </a>
                     ) : (
                       <Button
-                        colorScheme={"orange"}
+                        colorScheme={"blue"}
                         size={"md"}
                         variant="outline"
                         w={{ base: "full" }}
                         rounded={"md"}
                         onClick={() => {
-                          metamaskAuth();
+                          walletConnectLogin();
                         }}
                       >
                         <HStack>
@@ -321,7 +271,7 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
                               }
                             ></Image>
                           </Box>
-                          <Text>Metamask login</Text>
+                          <Text>wallet connect</Text>
                         </HStack>
                       </Button>
                     )}
