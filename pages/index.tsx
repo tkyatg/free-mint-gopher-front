@@ -20,130 +20,187 @@ import {
   ModalOverlay,
   ModalContent,
   ModalHeader,
-  ModalCloseButton,
   ModalBody,
   ModalFooter,
   useDisclosure,
   Skeleton,
+  Spacer,
+  useToast,
+  Spinner,
 } from "@chakra-ui/react";
-import type { NextPageWithLayout } from "next";
+import type { GetServerSideProps, NextPageWithLayout } from "next";
 import { Layout } from "@/components/layout/default";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { BigNumber, ethers } from "ethers";
+import { ethers, providers } from "ethers";
+import QRCodeModal from "@walletconnect/qrcode-modal";
+import WalletConnect from "@walletconnect/client";
 const nfts = [
   {
-    name: "ノーマルGopherくん",
+    name: "普通のGopherくん（正）",
     imageUrl: "/gophers/1.png",
   },
   {
-    name: "左が気になるGopherくん",
+    name: "Gopherくんの横顔（左）",
     imageUrl: "/gophers/2.png",
   },
   {
-    name: "右が気になるGopherくん",
+    name: "Gopherくんの横顔（右）",
     imageUrl: "/gophers/3.png",
   },
   {
-    name: "気が狂ったGopherくん",
+    name: "狂気のGopherくん（？）",
     imageUrl: "/gophers/4.png",
   },
 ];
 const abiJson = require("../contracts/abi.json");
 const contractAddress = "0xEf473F2eFDE884950b93C6dC0d31825a4c1aE42F";
 
-const Home: NextPageWithLayout = () => {
-  const [totalSupply, setTotalSupply] = useState<BigInt>();
-  const [walletAddress, setWalletAddress] = useState<string>();
-  const [minting, setMinting] = useState<boolean>(false);
+type Props = {
+  totalSupplyHex: string;
+};
+
+const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
+  const [totalSupply, _] = useState<BigInt>(BigInt(totalSupplyHex));
+
   const { isOpen, onOpen, onClose } = useDisclosure();
   const finalRef = useRef(null);
   const [imageUrl, setImageUrl] = useState<string>();
   const [tokenId, setTokenId] = useState<number>();
+  const [connector, setConnector] = useState<WalletConnect>();
+  const toast = useToast();
+  const [loading, setLoading] = useState<boolean>(false);
+  const [loadingMessage, setLoadingMessage] = useState<string>();
 
   useEffect(() => {
-    (async () => {
-      const ethereum = (window as any).ethereum;
-      if (!ethereum) {
-        alert("このままだと動かない");
-        return;
-      }
-      const provider = new ethers.providers.Web3Provider(ethereum);
-      const contract = new ethers.Contract(
-        contractAddress,
-        abiJson["abi"],
-        provider
-      );
-      const ts = await contract.totalSupply();
-      const accounts = await ethereum.request({
-        method: "eth_accounts",
-      });
-      if (accounts.length !== 0) {
-        setWalletAddress(accounts[0].toLowerCase());
-      }
-      setTotalSupply(ts);
-    })();
-  }, [totalSupply, walletAddress]);
-
-  async function metamaskAuth() {
-    const ethereum = (window as any).ethereum;
-    if (!ethereum) {
-      alert("このままだと動かない");
-      return;
-    }
-    const accounts = await ethereum.request({
-      method: "eth_requestAccounts",
+    const connector = new WalletConnect({
+      bridge: "https://bridge.walletconnect.org",
+      qrcodeModal: QRCodeModal,
     });
-    if (accounts.length !== 0) {
-      setWalletAddress(accounts[0]);
-    }
-  }
-  async function mintNft() {
-    if (minting) {
+
+    setConnector(connector);
+  }, [totalSupply]);
+
+  async function walletConnectLogin() {
+    if (!connector) {
       return;
     }
-    setMinting(true);
-    try {
-      const ethereum = (window as any).ethereum;
-      if (!ethereum) {
-        alert("このままだと動かない");
+    if (!connector.connected) {
+      await connector.createSession();
+    }
+    connector.on("connect", (error, _) => {
+      if (error) {
+        console.error(error);
         return;
       }
+    });
+    connector.on("disconnect", async () => {
+      await connector.killSession();
+    });
+  }
 
-      await ethereum.request({
-        method: "wallet_switchEthereumChain",
-        params: [{ chainId: "0x5" }],
+  // mintを行う
+  async function mintNft() {
+    if (loading) {
+      return;
+    }
+    const account = connector?.accounts[0];
+    if (!account) {
+      return;
+    }
+    const provider = new ethers.providers.JsonRpcProvider(
+      "https://rpc.ankr.com/eth_goerli"
+    );
+    const signer = new ethers.VoidSigner(account, provider);
+    const contract = new ethers.Contract(
+      contractAddress,
+      abiJson["abi"],
+      signer
+    );
+    const fragment = contract.interface.getFunction("safeMint");
+    const selectorHash = contract.interface.getSighash(fragment);
+
+    setLoading(true);
+    setLoadingMessage("sending transaction...");
+    try {
+      const beforeTotalSupply = await contract.totalSupply();
+      const txHash = await connector.sendTransaction({
+        from: account,
+        to: contractAddress,
+        data: selectorHash,
+        value: ethers.utils.parseEther("0.01")._hex,
       });
-
-      const provider = new ethers.providers.Web3Provider(ethereum);
-      const signer = provider.getSigner();
-      const contract = new ethers.Contract(
-        contractAddress,
-        abiJson["abi"],
-        signer
-      );
-      const before = await contract.totalSupply();
-      const mintTx = await contract
-        .connect(signer)
-        .safeMint({ value: ethers.utils.parseEther("0.01") });
-      onOpen();
-      await mintTx.wait();
-      const after = await contract.totalSupply();
-
-      for (let i: number = before.toNumber(); i < after.toNumber(); i++) {
-        const owner = await contract.ownerOf(i);
-        if (walletAddress == owner.toLowerCase()) {
-          setTokenId(i);
-          setImageUrl("gophers/4.png");
-        }
-      }
-    } catch (err) {
+      toast({
+        description: "send transaction success",
+        status: "success",
+        duration: 9000,
+        isClosable: true,
+        position: "top-right",
+      });
+      await watchTransactionResult(txHash, beforeTotalSupply);
+    } catch (err: any) {
+      toast({
+        description: err.message,
+        status: "error",
+        duration: 9000,
+        isClosable: true,
+        position: "top-right",
+      });
       console.log(err);
       onClose();
-      alert("処理失敗");
-    } finally {
-      setMinting(false);
+      setLoading(false);
     }
+  }
+
+  // transactionの完了を待って、結果を取得する
+  async function watchTransactionResult(
+    txHash: string,
+    beforeTotalSupply: any
+  ) {
+    if (!txHash) {
+      setLoading(false);
+      return;
+    }
+    const account = connector?.accounts[0];
+    if (!account) {
+      setLoading(false);
+      return;
+    }
+    setLoadingMessage("waiting complite transaction...");
+    const provider = new ethers.providers.JsonRpcProvider(
+      "https://rpc.ankr.com/eth_goerli"
+    );
+    const signer = new ethers.VoidSigner(connector.accounts[0], provider);
+    const contract = new ethers.Contract(
+      contractAddress,
+      abiJson["abi"],
+      signer
+    );
+
+    let wacher = setInterval(async () => {
+      const receipt = await provider.getTransactionReceipt(txHash);
+      console.log(receipt);
+      if (receipt) {
+        const afterTotalSupply = await contract.totalSupply();
+        onOpen();
+        console.log(afterTotalSupply);
+        console.log(beforeTotalSupply);
+        for (
+          let i: number = beforeTotalSupply.toNumber();
+          i < afterTotalSupply.toNumber();
+          i++
+        ) {
+          const owner = await contract.ownerOf(i);
+          if (account == owner.toLowerCase()) {
+            setTokenId(i);
+            const imageUrl = await contract.tokenURI(i);
+            setImageUrl(imageUrl);
+          }
+          setLoading(false);
+          clearInterval(wacher);
+        }
+      }
+    }, 1000);
   }
 
   return (
@@ -162,7 +219,7 @@ const Home: NextPageWithLayout = () => {
         >
           <Stack spacing={{ base: 6, md: 10 }}>
             <Image
-              height={{ base: 120, md: 200 }}
+              height={{ base: 100, sm: 140, md: 200 }}
               width={"full"}
               rounded={"md"}
               src="main.png"
@@ -204,57 +261,88 @@ const Home: NextPageWithLayout = () => {
                     </HStack>
                   </Stack>
                   <Stack>
-                    <Text color="gray.700" fontSize="sm">
+                    <Text color="gray.700">
                       GopherくんのNFTがランダムに出現するガチャです。
                       <br />
                       全4種類。
                     </Text>
-                    <Text color="gray.700" fontSize="sm">
+                    <Text color="gray.700">
                       テスト環境のため、無料で利用できます。
                     </Text>
-                    <Text color="blue.500" fontSize="sm">
-                      <Link href={"https://zenn.dev"}>
+                    <Text color="blue.500">
+                      <Link
+                        href={
+                          "https://zenn.dev/takuya911/articles/free-mint-gophers"
+                        }
+                      >
                         このアプリについて（zenn）
                       </Link>
                     </Text>
-                    <Text color="gray.700" fontSize="sm">
-                      <span>※オリジナルのThe Go gopher（Gopherくん）は、</span>
-                      <span>Renée French</span>
-                      <span>によってデザインされました。</span>
+                    <Text color="gray.700">
+                      🚨オリジナルの The Go gopher（Gopher くん）は、Renée
+                      French によってデザインされました。
                     </Text>
                   </Stack>
                   <Stack spacing={6}>
                     <Flex>
                       <Heading color="gray.700" fontSize="lg">
-                        Price
+                        Price(Goerli)
                       </Heading>
                       <HStack ml={"auto"}>
                         <Text fontWeight={"bold"}>0.01 eth</Text>
                       </HStack>
                     </Flex>
-                    {walletAddress ? (
-                      <Button
-                        colorScheme={"twitter"}
-                        size={"md"}
-                        w={{ base: "full" }}
-                        rounded={"full"}
-                        onClick={() => {
-                          mintNft();
-                        }}
-                      >
-                        ガチャを回す
-                      </Button>
+
+                    {connector?.accounts[0] ? (
+                      loading ? (
+                        <Button
+                          colorScheme={"twitter"}
+                          size={"md"}
+                          w={{ base: "full" }}
+                          rounded={"md"}
+                          variant="outline"
+                        >
+                          <HStack>
+                            <Spinner size={"sm"} />
+                            <Text>{loadingMessage}</Text>
+                          </HStack>
+                        </Button>
+                      ) : (
+                        <Button
+                          colorScheme={"twitter"}
+                          size={"md"}
+                          w={{ base: "full" }}
+                          rounded={"md"}
+                          variant="outline"
+                          onClick={() => {
+                            mintNft();
+                          }}
+                        >
+                          <HStack>
+                            <Text>ガチャを回す</Text>
+                          </HStack>
+                        </Button>
+                      )
                     ) : (
                       <Button
-                        colorScheme={"orange"}
+                        colorScheme={"blue"}
                         size={"md"}
+                        variant="outline"
                         w={{ base: "full" }}
-                        rounded={"full"}
+                        rounded={"md"}
                         onClick={() => {
-                          metamaskAuth();
+                          walletConnectLogin();
                         }}
                       >
-                        Metamask login
+                        <HStack>
+                          <Image
+                            height={6}
+                            width={6}
+                            alt={"metamask icon"}
+                            src={"/walletconnect.svg"}
+                          ></Image>
+                          <Text>wallet connect</Text>
+                        </HStack>
                       </Button>
                     )}
                   </Stack>
@@ -275,46 +363,38 @@ const Home: NextPageWithLayout = () => {
                         <Divider />
                         <Stack>
                           <Flex>
-                            <Text color="gray.700" fontSize="sm">
-                              Network
-                            </Text>
-                            <Text color="gray.700" fontSize="sm" ml={"auto"}>
-                              Goerli
-                            </Text>
+                            <Text color="gray.700">Network</Text>
+                            <Spacer />
+                            <Text color="gray.700">Goerli</Text>
                           </Flex>
                           <Flex>
-                            <Text color="gray.700" fontSize="sm">
-                              Contract Address
-                            </Text>
-                            <Box ml={"auto"}>
+                            <Text color="gray.700">Contract Address</Text>
+                            <Spacer />
+                            <Text color="blue.500">
                               <Link
                                 href={
                                   "https://goerli.etherscan.io/address/0xEf473F2eFDE884950b93C6dC0d31825a4c1aE42F"
                                 }
                               >
-                                <Text color="blue.500" fontSize="sm">
-                                  {contractAddress.slice(0, 4) +
-                                    "..." +
-                                    contractAddress.slice(-4)}
-                                </Text>
+                                {contractAddress.slice(0, 4) +
+                                  "..." +
+                                  contractAddress.slice(-4)}
                               </Link>
-                            </Box>
+                            </Text>
                           </Flex>
                           <Flex>
-                            <Text color="gray.700" fontSize="sm">
+                            <Text color="gray.700">
                               これまでに実行された回数
                             </Text>
-                            <Text color="gray.700" fontSize="sm" ml={"auto"}>
+                            <Spacer />
+                            <Text color="gray.700">
                               {totalSupply?.toString()}
                             </Text>
                           </Flex>
                           <Flex>
-                            <Text color="gray.700" fontSize="sm">
-                              ガチャガチャ残り
-                            </Text>
-                            <Text color="gray.700" fontSize="sm" ml={"auto"}>
-                              ∞
-                            </Text>
+                            <Text color="gray.700">ガチャガチャ残り</Text>
+                            <Spacer />
+                            <Text color="gray.700">∞</Text>
                           </Flex>
                         </Stack>
                       </Stack>
@@ -333,12 +413,36 @@ const Home: NextPageWithLayout = () => {
                         <Divider />
                         <Stack>
                           <Flex>
-                            <Text color="gray.700" fontSize="sm">
-                              Twitter
-                            </Text>
-                            <Text color="blue.500" fontSize="sm" ml={"auto"}>
+                            <Text color="gray.700">Twitter</Text>
+                            <Spacer />
+                            <Text color="blue.500">
                               <Link href={"https://twitter.com/takuya_web3"}>
                                 @takuya_web3
+                              </Link>
+                            </Text>
+                          </Flex>
+                          <Flex>
+                            <Text color="gray.700">Github</Text>
+                            <Spacer />
+                            <Text color="blue.500">
+                              <Link
+                                href={
+                                  "https://github.com/tkyatg/free-mint-gopher-front"
+                                }
+                              >
+                                Front Repository
+                              </Link>
+                            </Text>
+                          </Flex>
+                          <Flex>
+                            <Spacer />
+                            <Text color="blue.500">
+                              <Link
+                                href={
+                                  "https://github.com/tkyatg/free-mint-gopher-contract"
+                                }
+                              >
+                                Contract Repository
                               </Link>
                             </Text>
                           </Flex>
@@ -401,7 +505,9 @@ const Home: NextPageWithLayout = () => {
             <ModalOverlay />
             <ModalContent>
               <ModalHeader textAlign={"center"}>
-                {imageUrl ? "当たったGopherくん🎉" : "平均10秒以上待ちます..."}
+                {imageUrl
+                  ? "🎉 このGopherくんが当たりました 🎉"
+                  : "Minting...(10秒くらい)"}
               </ModalHeader>
               <ModalBody>
                 {imageUrl ? (
@@ -410,7 +516,7 @@ const Home: NextPageWithLayout = () => {
                     width={"full"}
                     objectFit="cover"
                     rounded={"md"}
-                    src={imageUrl ? imageUrl : undefined}
+                    src={imageUrl}
                     alt="img"
                   />
                 ) : (
@@ -437,9 +543,11 @@ const Home: NextPageWithLayout = () => {
                 </Stack>
               </ModalBody>
               <ModalFooter>
-                <Button colorScheme="twitter" onClick={onClose}>
-                  閉じる
-                </Button>
+                {tokenId && (
+                  <Button colorScheme="twitter" onClick={onClose}>
+                    閉じる
+                  </Button>
+                )}
               </ModalFooter>
             </ModalContent>
           </Modal>
@@ -450,3 +558,22 @@ const Home: NextPageWithLayout = () => {
 };
 
 export default Home;
+
+export const getServerSideProps: GetServerSideProps = async (context) => {
+  const provider = new ethers.providers.JsonRpcProvider(
+    "https://rpc.ankr.com/eth_goerli"
+  );
+  const contract = new ethers.Contract(
+    contractAddress,
+    abiJson["abi"],
+    provider
+  );
+  const totalSupply = await contract.totalSupply();
+  const props: Props = {
+    totalSupplyHex: totalSupply._hex,
+  };
+
+  return {
+    props: props,
+  };
+};
