@@ -79,6 +79,9 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
       qrcodeModal: QRCodeModal,
     });
     setConnector(connector);
+    if (connector.accounts[0]) {
+      setAddress(connector.accounts[0]);
+    }
   }, [totalSupply]);
 
   async function walletConnectLogin() {
