@@ -25,6 +25,8 @@ import {
   useDisclosure,
   Skeleton,
   Spacer,
+  useToast,
+  Spinner,
 } from "@chakra-ui/react";
 import type { GetServerSideProps, NextPageWithLayout } from "next";
 import { Layout } from "@/components/layout/default";
@@ -35,19 +37,19 @@ import QRCodeModal from "@walletconnect/qrcode-modal";
 import WalletConnect from "@walletconnect/client";
 const nfts = [
   {
-    name: "ノーマルGopherくん",
+    name: "普通のGopherくん（正）",
     imageUrl: "/gophers/1.png",
   },
   {
-    name: "左が気になるGopherくん",
+    name: "Gopherくんの横顔（左）",
     imageUrl: "/gophers/2.png",
   },
   {
-    name: "右が気になるGopherくん",
+    name: "Gopherくんの横顔（右）",
     imageUrl: "/gophers/3.png",
   },
   {
-    name: "気が狂ったGopherくん",
+    name: "狂気のGopherくん（？）",
     imageUrl: "/gophers/4.png",
   },
 ];
@@ -61,12 +63,14 @@ type Props = {
 const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
   const [totalSupply, _] = useState<BigInt>(BigInt(totalSupplyHex));
 
-  const [minting, setMinting] = useState<boolean>(false);
   const { isOpen, onOpen, onClose } = useDisclosure();
   const finalRef = useRef(null);
   const [imageUrl, setImageUrl] = useState<string>();
   const [tokenId, setTokenId] = useState<number>();
   const [connector, setConnector] = useState<WalletConnect>();
+  const toast = useToast();
+  const [loading, setLoading] = useState<boolean>(false);
+  const [loadingMessage, setLoadingMessage] = useState<string>();
 
   useEffect(() => {
     const connector = new WalletConnect({
@@ -75,78 +79,128 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
     });
 
     setConnector(connector);
-
-    (async () => {
-      try {
-        // TODO: set user
-      } catch (err) {
-        console.log(err);
-      }
-    })();
   }, [totalSupply]);
 
   async function walletConnectLogin() {
     if (!connector) {
       return;
     }
-    if (connector.accounts[0]) {
-      await connector.killSession();
+    if (!connector.connected) {
+      await connector.createSession();
     }
-    await connector.createSession();
-    connector.on("connect", (error, payload) => {
+    connector.on("connect", (error, _) => {
       if (error) {
         console.error(error);
         return;
       }
     });
+    connector.on("disconnect", async () => {
+      await connector.killSession();
+    });
   }
 
+  // mintを行う
   async function mintNft() {
-    if (minting) {
+    if (loading) {
       return;
     }
-    setMinting(true);
+    const account = connector?.accounts[0];
+    if (!account) {
+      return;
+    }
+    const provider = new ethers.providers.JsonRpcProvider(
+      "https://rpc.ankr.com/eth_goerli"
+    );
+    const signer = new ethers.VoidSigner(account, provider);
+    const contract = new ethers.Contract(
+      contractAddress,
+      abiJson["abi"],
+      signer
+    );
+    const fragment = contract.interface.getFunction("safeMint");
+    const selectorHash = contract.interface.getSighash(fragment);
+
+    setLoading(true);
+    setLoadingMessage("sending transaction...");
     try {
-      if (!connector || !connector.accounts[0]) {
-        return;
-      }
-      const provider = new ethers.providers.JsonRpcProvider(
-        "https://rpc.ankr.com/eth_goerli"
-      );
-      const signer = new ethers.VoidSigner(connector.accounts[0], provider);
-      const contract = new ethers.Contract(
-        contractAddress,
-        abiJson["abi"],
-        signer
-      );
-      const fragment = contract.interface.getFunction("safeMint");
-      const selectorHash = contract.interface.getSighash(fragment);
-      const before = await contract.totalSupply();
-      const result = await connector.sendTransaction({
-        from: connector.accounts[0],
+      const beforeTotalSupply = await contract.totalSupply();
+      const txHash = await connector.sendTransaction({
+        from: account,
         to: contractAddress,
         data: selectorHash,
         value: ethers.utils.parseEther("0.01")._hex,
       });
-      console.log(`transaction hash: ${result}`);
-      // onOpen();
-      // const after = await contract.totalSupply();
-
-      // // TODO: transaction から tokenID とか取得できないかな
-      // for (let i: number = before.toNumber(); i < after.toNumber(); i++) {
-      //   const owner = await contract.ownerOf(i);
-      //   if (walletAddress == owner.toLowerCase()) {
-      //     setTokenId(i);
-      //     const imageUrl = await contract.tokenURI(i);
-      //     setImageUrl(imageUrl);
-      //   }
-      // }
-    } catch (err) {
+      toast({
+        description: "send transaction success",
+        status: "success",
+        duration: 9000,
+        isClosable: true,
+        position: "top-right",
+      });
+      await watchTransactionResult(txHash, beforeTotalSupply);
+    } catch (err: any) {
+      toast({
+        description: err.message,
+        status: "error",
+        duration: 9000,
+        isClosable: true,
+        position: "top-right",
+      });
       console.log(err);
       onClose();
-    } finally {
-      setMinting(false);
+      setLoading(false);
     }
+  }
+
+  // transactionの完了を待って、結果を取得する
+  async function watchTransactionResult(
+    txHash: string,
+    beforeTotalSupply: any
+  ) {
+    if (!txHash) {
+      setLoading(false);
+      return;
+    }
+    const account = connector?.accounts[0];
+    if (!account) {
+      setLoading(false);
+      return;
+    }
+    setLoadingMessage("waiting complite transaction...");
+    const provider = new ethers.providers.JsonRpcProvider(
+      "https://rpc.ankr.com/eth_goerli"
+    );
+    const signer = new ethers.VoidSigner(connector.accounts[0], provider);
+    const contract = new ethers.Contract(
+      contractAddress,
+      abiJson["abi"],
+      signer
+    );
+
+    let wacher = setInterval(async () => {
+      const receipt = await provider.getTransactionReceipt(txHash);
+      console.log(receipt);
+      if (receipt) {
+        const afterTotalSupply = await contract.totalSupply();
+        onOpen();
+        console.log(afterTotalSupply);
+        console.log(beforeTotalSupply);
+        for (
+          let i: number = beforeTotalSupply.toNumber();
+          i < afterTotalSupply.toNumber();
+          i++
+        ) {
+          const owner = await contract.ownerOf(i);
+          if (account == owner.toLowerCase()) {
+            setTokenId(i);
+            const imageUrl = await contract.tokenURI(i);
+            setImageUrl(imageUrl);
+          }
+          setLoading(false);
+          clearInterval(wacher);
+        }
+      }
+    }, 1000);
   }
 
   return (
@@ -238,19 +292,37 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
                         <Text fontWeight={"bold"}>0.01 eth</Text>
                       </HStack>
                     </Flex>
+
                     {connector?.accounts[0] ? (
-                      <Button
-                        colorScheme={"twitter"}
-                        size={"md"}
-                        w={{ base: "full" }}
-                        rounded={"md"}
-                        variant="outline"
-                        onClick={() => {
-                          mintNft();
-                        }}
-                      >
-                        ガチャを回す
-                      </Button>
+                      loading ? (
+                        <Button
+                          colorScheme={"twitter"}
+                          size={"md"}
+                          w={{ base: "full" }}
+                          rounded={"md"}
+                          variant="outline"
+                        >
+                          <HStack>
+                            <Spinner size={"sm"} />
+                            <Text>{loadingMessage}</Text>
+                          </HStack>
+                        </Button>
+                      ) : (
+                        <Button
+                          colorScheme={"twitter"}
+                          size={"md"}
+                          w={{ base: "full" }}
+                          rounded={"md"}
+                          variant="outline"
+                          onClick={() => {
+                            mintNft();
+                          }}
+                        >
+                          <HStack>
+                            <Text>ガチャを回す</Text>
+                          </HStack>
+                        </Button>
+                      )
                     ) : (
                       <Button
                         colorScheme={"blue"}
@@ -263,14 +335,12 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
                         }}
                       >
                         <HStack>
-                          <Box height={8} width={8}>
-                            <Image
-                              alt={"metamask icon"}
-                              src={
-                                "https://upload.wikimedia.org/wikipedia/commons/3/36/MetaMask_Fox.svg"
-                              }
-                            ></Image>
-                          </Box>
+                          <Image
+                            height={6}
+                            width={6}
+                            alt={"metamask icon"}
+                            src={"/walletconnect.svg"}
+                          ></Image>
                           <Text>wallet connect</Text>
                         </HStack>
                       </Button>
@@ -446,7 +516,7 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
                     width={"full"}
                     objectFit="cover"
                     rounded={"md"}
-                    src={imageUrl ? imageUrl : undefined}
+                    src={imageUrl}
                     alt="img"
                   />
                 ) : (
