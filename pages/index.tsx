@@ -71,13 +71,13 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
   const toast = useToast();
   const [loading, setLoading] = useState<boolean>(false);
   const [loadingMessage, setLoadingMessage] = useState<string>();
+  const [address, setAddress] = useState<string>();
 
   useEffect(() => {
     const connector = new WalletConnect({
       bridge: "https://bridge.walletconnect.org",
       qrcodeModal: QRCodeModal,
     });
-
     setConnector(connector);
   }, [totalSupply]);
 
@@ -88,11 +88,12 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
     if (!connector.connected) {
       await connector.createSession();
     }
-    connector.on("connect", (error, _) => {
+    connector.on("connect", (error, account) => {
       if (error) {
         console.error(error);
         return;
       }
+      setAddress(account.params[0].accounts[0]);
     });
     connector.on("disconnect", async () => {
       await connector.killSession();
@@ -101,17 +102,13 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
 
   // mintを行う
   async function mintNft() {
-    if (loading) {
-      return;
-    }
-    const account = connector?.accounts[0];
-    if (!account) {
+    if (loading || !address || !connector) {
       return;
     }
     const provider = new ethers.providers.JsonRpcProvider(
       "https://rpc.ankr.com/eth_goerli"
     );
-    const signer = new ethers.VoidSigner(account, provider);
+    const signer = new ethers.VoidSigner(address, provider);
     const contract = new ethers.Contract(
       contractAddress,
       abiJson["abi"],
@@ -125,7 +122,7 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
     try {
       const beforeTotalSupply = await contract.totalSupply();
       const txHash = await connector.sendTransaction({
-        from: account,
+        from: address,
         to: contractAddress,
         data: selectorHash,
         value: ethers.utils.parseEther("0.01")._hex,
@@ -293,7 +290,7 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
                       </HStack>
                     </Flex>
 
-                    {connector?.accounts[0] ? (
+                    {address ? (
                       loading ? (
                         <Button
                           colorScheme={"twitter"}
