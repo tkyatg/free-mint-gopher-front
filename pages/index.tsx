@@ -272,7 +272,7 @@ const Home: NextPageWithLayout = ({ totalSupplyHex }: Props) => {
                     <Text color="blue.500">
                       <Link
                         href={
-                          "https://zenn.dev/takuya911/articles/free-mint-gophers"
+                          "https://zenn.dev/takuya911/articles/free-mint-gopher"
                         }
                       >
                         このアプリについて（zenn）
